@@ -37,7 +37,7 @@ module Geokit
     end
     
     def url_escape(s)
-      URL.encode(s)
+      URI.encode(s)
     end
     
     def camelize(str)
