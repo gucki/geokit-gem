@@ -77,8 +77,8 @@ module Geokit
     @@geonames = false
     @@provider_order = [:google,:us]
     @@ip_provider_order = [:geo_plugin,:ip]
-    @@logger=Logger.new(STDOUT)
-    @@logger.level=Logger::INFO
+    @@logger = Logger.new(STDOUT)
+    @@logger.level = Logger::INFO
     @@domain = nil
     
     def self.__define_accessors
@@ -165,6 +165,17 @@ module Geokit
                 GeoKit::Geocoders::proxy_port,
                 GeoKit::Geocoders::proxy_user,
                 GeoKit::Geocoders::proxy_pass).start(uri.host, uri.port) { |http| http.get(uri.path + "?" + uri.query) }
+        if res && res.body && res.body.respond_to?(:force_encoding)
+          res.body = res.body.force_encoding("UTF-8")
+          unless res.body.valid_encoding?
+            begin
+              res.body = res.body.force_encoding("ISO-8859-1").encode("UTF-8")
+            rescue => e
+              logger.warn "Response contains invalid byte sequences, ignoring invalid characters."
+              res.body = Iconv.new('UTF-8//IGNORE', 'UTF-8').iconv(res.body)
+            end
+          end
+        end        
         return res
       end
       
@@ -206,7 +217,6 @@ module Geokit
         res = self.call_geocoder_service(url)
         return GeoLoc.new if !res.is_a?(Net::HTTPSuccess)
         xml = res.body
-        xml = xml.force_encoding(Encoding::UTF_8) if xml.respond_to?(:force_encoding)
         logger.debug "Geocoder.ca geocoding. Address: #{address}. Result: #{xml}"
         # Parse the document.
         doc = REXML::Document.new(xml)    
@@ -531,7 +541,12 @@ module Geokit
       def self.do_geocode(ip, options = {})
         return GeoLoc.new unless /^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})?$/.match(ip)
         response = self.call_geocoder_service("http://www.geoplugin.net/xml.gp?ip=#{ip}")
-        return response.is_a?(Net::HTTPSuccess) ? parse_xml(response.body) : GeoLoc.new
+        if response.is_a?(Net::HTTPSuccess)
+          logger.debug "GeoPluginGeocoder geocoding. Ip: #{ip}. Result: #{response.body}"
+          parse_xml(response.body)
+        else
+          GeoLoc.new
+        end
       rescue => e
         logger.error "Caught an error during GeoPluginGeocoder geocoding call: #{e.message}"
         return GeoLoc.new
@@ -587,7 +602,12 @@ module Geokit
         return GeoLoc.new if self.private_ip_address?(ip)
         url = "http://api.hostip.info/get_html.php?ip=#{ip}&position=true"
         response = self.call_geocoder_service(url)
-        response.is_a?(Net::HTTPSuccess) ? parse_body(response.body) : GeoLoc.new
+        if response.is_a?(Net::HTTPSuccess)
+          logger.debug "IpGeocoder geocoding. Ip: #{ip}. Result: #{response.body}"
+          parse_body(response.body)
+        else
+          GeoLoc.new
+        end
       rescue => e
         logger.error "Caught an error during HostIp geocoding call: #{e.message}"
         return GeoLoc.new
@@ -655,8 +675,8 @@ module Geokit
             klass = Geokit::Geocoders.const_get "#{Geokit::Inflector::camelize(provider.to_s)}Geocoder"
             res = klass.send :geocode, address, options
             return res if res.success?
-          rescue
-            logger.error("Something has gone very wrong during geocoding, OR you have configured an invalid class name in Geokit::Geocoders::provider_order. Address: #{address}. Provider: #{provider}")
+          rescue => e
+            logger.error("Something has gone very wrong during geocoding, OR you have configured an invalid class name in Geokit::Geocoders::provider_order. Address: #{address}. Provider: #{provider}. Error: #{e.message}")
           end
         end
         # If we get here, we failed completely.
